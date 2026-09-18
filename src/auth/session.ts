@@ -15,6 +15,24 @@ export interface SessionRecord {
 /** 7 dias, TTL fixo (iat + TTL = exp). */
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Identificador determinístico do código/build da função — sem segredo, sem token. */
+export const DIAG_BUILD_ID = "e6e3c8d-stateless-m1";
+
+export type VerificationReason =
+  | "valid"
+  | "missing_token"
+  | "missing_secret"
+  | "invalid_format"
+  | "invalid_signature"
+  | "invalid_payload"
+  | "invalid_sub_un"
+  | "invalid_iat"
+  | "expired";
+
+export function isSecretPresent(): boolean {
+  return (process.env.TELEZAP_SESSION_SECRET ?? "").trim().length > 0;
+}
+
 function getSecret(): string {
   const secret = (process.env.TELEZAP_SESSION_SECRET ?? "").trim();
   if (!secret) {
@@ -49,53 +67,73 @@ export function createSession(userId: string, username: string, now = Date.now()
 }
 
 /**
- * Verifica um token stateless. Retorna o SessionRecord se válido e não
- * expirado, ou null caso contrário. Não consulta nenhum Map.
+ * Implementação interna única — toda validação HMAC/payload/iat/exp passa
+ * por aqui. Tanto verifySession quanto verifySessionWithReason a utilizam,
+ * garantindo que diagnóstico e autenticação real sejam idênticos.
  */
-export function verifySession(token: string, now = Date.now()): SessionRecord | null {
-  if (!token || typeof token !== "string") return null;
-  const dot = token.indexOf(".");
-  if (dot === -1) return null;
-  const payloadB64 = token.slice(0, dot);
-  const sigB64 = token.slice(dot + 1);
-  if (!payloadB64 || !sigB64) return null;
+function verifySessionInternal(
+  token: string,
+  now: number,
+): { record: SessionRecord | null; reason: VerificationReason } {
+  if (!token || typeof token !== "string") return { record: null, reason: "missing_token" };
 
   let secret: string;
   try {
     secret = getSecret();
   } catch {
-    return null;
+    return { record: null, reason: "missing_secret" };
   }
 
-  // Recalcular assinatura e comparar com timingSafeEqual
+  const dot = token.indexOf(".");
+  if (dot === -1) return { record: null, reason: "invalid_format" };
+  const payloadB64 = token.slice(0, dot);
+  const sigB64 = token.slice(dot + 1);
+  if (!payloadB64 || !sigB64) return { record: null, reason: "invalid_format" };
+
   const expectedSig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
-  // timingSafeEqual exige buffers de mesmo tamanho
   const a = Buffer.from(sigB64, "utf8");
   const b = Buffer.from(expectedSig, "utf8");
-  if (a.length !== b.length) return null;
+  if (a.length !== b.length) return { record: null, reason: "invalid_signature" };
   try {
-    if (!timingSafeEqual(a, b)) return null;
+    if (!timingSafeEqual(a, b)) return { record: null, reason: "invalid_signature" };
   } catch {
-    return null;
+    return { record: null, reason: "invalid_signature" };
   }
 
-  // Decodificar e validar payload
   let payload: { sub?: unknown; un?: unknown; iat?: unknown; exp?: unknown };
   try {
     const json = b64urlDecodeToString(payloadB64);
     payload = JSON.parse(json);
   } catch {
-    return null;
+    return { record: null, reason: "invalid_payload" };
   }
   const { sub, un, iat, exp } = payload;
-  if (typeof sub !== "string" || typeof un !== "string") return null;
-  if (typeof iat !== "number" || typeof exp !== "number") return null;
-  if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
-  if (exp <= now) return null;
-  // iat não pode estar no futuro além de um pequeno skew
-  if (iat > now + 60_000) return null;
+  if (typeof sub !== "string" || typeof un !== "string") return { record: null, reason: "invalid_sub_un" };
+  if (typeof iat !== "number" || typeof exp !== "number") return { record: null, reason: "invalid_iat" };
+  if (!Number.isFinite(iat) || !Number.isFinite(exp)) return { record: null, reason: "invalid_iat" };
+  if (exp <= now) return { record: null, reason: "expired" };
+  if (iat > now + 60_000) return { record: null, reason: "invalid_iat" };
 
-  return { userId: sub, username: un, createdAt: iat, expiresAt: exp };
+  return { record: { userId: sub, username: un, createdAt: iat, expiresAt: exp }, reason: "valid" };
+}
+
+/**
+ * Verifica um token stateless. Retorna o SessionRecord se válido e não
+ * expirado, ou null caso contrário. Não consulta nenhum Map.
+ */
+export function verifySession(token: string, now = Date.now()): SessionRecord | null {
+  return verifySessionInternal(token, now).record;
+}
+
+/**
+ * Variante diagnóstica — expõe apenas o motivo seguro (enum), sem token,
+ * sem secret, sem payload. Usa exatamente a mesma validação interna.
+ */
+export function verifySessionWithReason(
+  token: string,
+  now = Date.now(),
+): { record: SessionRecord | null; reason: VerificationReason } {
+  return verifySessionInternal(token, now);
 }
 
 // ── Compatibilidade: o modelo anterior usava Map + sliding TTL ─────────────

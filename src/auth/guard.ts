@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { verifySession } from "./session.js";
+import { DIAG_BUILD_ID, isSecretPresent, verifySessionWithReason } from "./session.js";
 import { SESSION_COOKIE } from "./cookies.js";
+import { logger } from "../utils/logger.js";
 
 export interface AuthenticatedUser {
   id: string;
@@ -47,12 +48,25 @@ export async function requireAppUser(request: NextRequest): Promise<Authenticate
     }
   }
   const token = readToken(request);
+  const cookiePresent = !!token;
+  const secretPresent = isSecretPresent();
+  const route = request.nextUrl.pathname;
+
   if (!token) {
+    logger.info(
+      `[auth-diag] route=${route} cookiePresent=${cookiePresent} secretPresent=${secretPresent} reason=missing_token build=${DIAG_BUILD_ID}`,
+    );
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
-  const record = verifySession(token);
+  const { record, reason } = verifySessionWithReason(token);
   if (!record) {
+    logger.info(
+      `[auth-diag] route=${route} cookiePresent=${cookiePresent} secretPresent=${secretPresent} reason=${reason} build=${DIAG_BUILD_ID}`,
+    );
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
+  logger.info(
+    `[auth-diag] route=${route} cookiePresent=${cookiePresent} secretPresent=${secretPresent} reason=valid build=${DIAG_BUILD_ID}`,
+  );
   return { id: record.userId, username: record.username };
 }
