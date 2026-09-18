@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.next/
+.env
+output/*
+!output/.gitkeep
+.wwebjs_auth/
+.wwebjs_cache/
+.whatsapp_sessions/
+.telegram_session
+.telegram_sessions/
+*.log
+.DS_Store
