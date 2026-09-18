@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getSession } from "./session.js";
+import { verifySession } from "./session.js";
 import { SESSION_COOKIE } from "./cookies.js";
 
 export interface AuthenticatedUser {
@@ -50,7 +50,7 @@ export async function requireAppUser(request: NextRequest): Promise<Authenticate
   if (!token) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
-  const record = getSession(token);
+  const record = verifySession(token);
   if (!record) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }

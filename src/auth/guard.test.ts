@@ -1,11 +1,20 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAppUser } from "./guard.js";
-import { createSession, __resetSessionsForTests } from "./session.js";
+import { createSession } from "./session.js";
 import { SESSION_COOKIE } from "./cookies.js";
 
+const TEST_SECRET = "test-secret-stateless-32-bytes-long-1234";
+let savedSecret: string | undefined;
+
 beforeEach(() => {
-  __resetSessionsForTests();
+  savedSecret = process.env.TELEZAP_SESSION_SECRET;
+  process.env.TELEZAP_SESSION_SECRET = TEST_SECRET;
+});
+
+afterEach(() => {
+  if (savedSecret === undefined) delete process.env.TELEZAP_SESSION_SECRET;
+  else process.env.TELEZAP_SESSION_SECRET = savedSecret;
 });
 
 function request(url: string, init?: { method?: string; headers?: Record<string, string> }): NextRequest {

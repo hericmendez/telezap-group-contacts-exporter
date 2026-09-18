@@ -8,6 +8,7 @@ import { __resetSessionsForTests } from "../../../auth/session.js";
 import { SESSION_COOKIE } from "../../../auth/cookies.js";
 
 let savedUsers: string | undefined;
+let savedSecret: string | undefined;
 
 function jsonRequest(url: string, body: unknown): NextRequest {
   return new NextRequest(url, {
@@ -26,6 +27,8 @@ function cookieFrom(res: Response): string | null {
 
 beforeEach(() => {
   savedUsers = process.env.TELEZAP_USERS;
+  savedSecret = process.env.TELEZAP_SESSION_SECRET;
+  process.env.TELEZAP_SESSION_SECRET = "test-secret-stateless-32-bytes-long-1234";
   vi.stubEnv("NODE_ENV", "test");
   __resetSessionsForTests();
   vi.clearAllMocks();
@@ -34,6 +37,8 @@ beforeEach(() => {
 afterEach(() => {
   if (savedUsers === undefined) delete process.env.TELEZAP_USERS;
   else process.env.TELEZAP_USERS = savedUsers;
+  if (savedSecret === undefined) delete process.env.TELEZAP_SESSION_SECRET;
+  else process.env.TELEZAP_SESSION_SECRET = savedSecret;
   vi.unstubAllGlobals();
   __resetSessionsForTests();
 });
@@ -110,7 +115,7 @@ describe("GET /api/auth/me", () => {
 });
 
 describe("POST /api/auth/logout", () => {
-  it("invalidates the session, clears the cookie, and leaves managers alone", async () => {
+  it("clears the cookie and leaves managers alone (stateless: token remains valid until exp)", async () => {
     await provision();
     const login = await loginPOST(jsonRequest("http://localhost/api/auth/login", { username: "revi", password: "s3cret" }));
     const token = cookieFrom(login)!;
@@ -125,10 +130,14 @@ describe("POST /api/auth/logout", () => {
     expect(await out.json()).toEqual({ authenticated: false });
     expect(out.headers.get("Set-Cookie")).toContain("Max-Age=0");
 
-    const meAfter = new NextRequest("http://localhost/api/auth/me", {
+    // stateless: sem Map, logout é só limpar o cookie no browser.
+    // O token antigo ainda é verificável até exp — sem blacklist neste escopo.
+    const meWithOldToken = new NextRequest("http://localhost/api/auth/me", {
       headers: { Cookie: `${SESSION_COOKIE}=${token}` },
     });
-    expect((await meGET(meAfter)).status).toBe(401);
+    expect((await meGET(meWithOldToken)).status).toBe(200);
+    // sem cookie → 401
+    expect((await meGET(new NextRequest("http://localhost/api/auth/me"))).status).toBe(401);
   }, 15000);
 
   it("logout touches neither platform registry", async () => {
